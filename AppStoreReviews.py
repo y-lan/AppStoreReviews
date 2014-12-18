@@ -15,6 +15,8 @@ import sys
 import string
 import argparse
 import re
+from urlparse import urlparse, parse_qs
+import json
 
 appStores = {
 'Argentina':          143505,
@@ -102,7 +104,8 @@ def getReviews(appStoreId, appId,maxReviews=-1):
     ''' 
     reviews=[]
     i=0
-    while True: 
+    while True:
+        print "crawling page %d (already %d reviews in box)" % (i, len(reviews))
         ret = _getReviewsForPage(appStoreId, appId, i)
         if len(ret)==0: # funny do while emulation ;)
             break
@@ -136,14 +139,16 @@ def _getReviewsForPage(appStoreId, appId, pageNo):
         version_node = node.find("{http://www.apple.com/itms/}HBoxView/{http://www.apple.com/itms/}TextView/{http://www.apple.com/itms/}SetFontStyle/{http://www.apple.com/itms/}GotoURL")
         if version_node is None:
             review["version"] = None
+            review["user"] = None
+            review["user_profile_id"] = None
         else:
             review["version"] = re.search("Version [^\n^\ ]+", version_node.tail).group()
-    
-        user_node = node.find("{http://www.apple.com/itms/}HBoxView/{http://www.apple.com/itms/}TextView/{http://www.apple.com/itms/}SetFontStyle/{http://www.apple.com/itms/}GotoURL/{http://www.apple.com/itms/}b")
-        if user_node is None:
-            review["user"] = None
-        else:
-            review["user"] = user_node.text.strip()
+            review["date"] = (re.search("[^\n]+[\n\ ]*$", version_node.tail).group()).strip()
+            review["user"] = version_node.text.strip()
+            o = urlparse(version_node.attrib['url'])
+            review["user_profile_id"] = long(parse_qs(o.query)['userProfileId'][0])
+
+        #user_node = node.find("{http://www.apple.com/itms/}HBoxView/{http://www.apple.com/itms/}TextView/{http://www.apple.com/itms/}SetFontStyle/{http://www.apple.com/itms/}GotoURL/{http://www.apple.com/itms/}b")
 
         rank_node = node.find("{http://www.apple.com/itms/}HBoxView/{http://www.apple.com/itms/}HBoxView/{http://www.apple.com/itms/}HBoxView")
         try:
@@ -159,6 +164,12 @@ def _getReviewsForPage(appStoreId, appId, pageNo):
         else:
             review["topic"] = topic_node.text
 
+        vote_node = node.find("{http://www.apple.com/itms/}HBoxView/{http://www.apple.com/itms/}HBoxView/{http://www.apple.com/itms/}HBoxView/{http://www.apple.com/itms/}VBoxView/{http://www.apple.com/itms/}GotoURL")
+        if vote_node is None:
+            review["id"] = None
+        else:
+            review["id"] = long(parse_qs(urlparse(vote_node.attrib['url']).query)['userReviewId'][0])
+
         reviews.append(review)
     return reviews
     
@@ -170,9 +181,9 @@ def _print_reviews(reviews, country):
         print ""
         sumRank = 0
         for review in reviews:
-            print "%s by %s" % (review["version"], review["user"])
+            print "Review(%s) on %s by %s(%s) on %s" % (review["id"], review["version"], review["user"], review["user_profile_id"], review["date"])
             for i in range(review["rank"]):
-                sys.stdout.write ("*") # to avoid space or newline after print
+                sys.stdout.write (u"\u2605") # to avoid space or newline after print
             print " (%s) %s" % (review["topic"], review["review"])
             print ""
             sumRank += review["rank"]
@@ -180,6 +191,10 @@ def _print_reviews(reviews, country):
         return (len(reviews), sumRank)
     else:
         return (0, 0)
+
+def _print_jsonmode(reviews):
+    for review in reviews:
+        print json.dumps(review)
 
 def _print_rawmode(reviews):
     for review in reviews:
@@ -191,7 +206,8 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--country', metavar='"Name"', type=str, default='all', help='AppStore country name (use -l to see them)')
     parser.add_argument('-l', '--list', action='store_true', default=False, help='AppStores list')
     parser.add_argument('-m', '--max-reviews',default=-1,metavar='MaxReviews',type=int,help='Max number of reviews to load')
-    parser.add_argument('-r', '--raw-mode',action='store_true',default=False,help='Print raw mode')
+    parser.add_argument('-r', '--raw-mode',action='store_true',default=False,help='Print in raw mode')
+    parser.add_argument('-j', '--json-mode',action='store_true',default=False,help='Print in JSON mode')
     args = parser.parse_args()
     if args.id == 0:
         parser.print_help()
@@ -216,6 +232,8 @@ if __name__ == '__main__':
                 reviews = getReviews(appStores[country], args.id,maxReviews=args.max_reviews)
                 if args.raw_mode:
                     _print_rawmode(reviews)
+                elif args.json_mode:
+                    _print_jsonmode(reviews)
                 else:
                     _print_reviews(reviews, country)
             except KeyError:
